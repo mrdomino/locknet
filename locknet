@@ -90,4 +90,4 @@ list_rules
 $SSH -N -p $pinhole_port \
   -D 1080 \
   -L 2000:devio.us:22 \
-  "$user@$pinhole_ip"
+  "$user@$pinhole_ip" >/dev/null 2>&1
