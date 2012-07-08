@@ -1,0 +1,93 @@
+#!/bin/bash
+
+: ${IPTABLES:=/sbin/iptables}
+: ${IP6TABLES:=/sbin/ip6tables}
+: ${SSH:=autossh}
+
+RESET_FILE=$(mktemp)
+
+
+function iptcmd_reset_flags() {
+  iptcmd="$1"
+  echo "sudo $iptcmd -F"
+  sudo $iptcmd -S | sed "s=^=sudo $iptcmd ="
+}
+
+function generate_firewall_reset() {
+  { iptcmd_reset_flags $IPTABLES
+    iptcmd_reset_flags $IP6TABLES
+  } > $RESET_FILE
+}
+
+function iptcmd_lockdown() {
+  iptcmd="$1"
+  sudo $iptcmd --flush
+  sudo $iptcmd --policy INPUT DROP
+  sudo $iptcmd --policy OUTPUT DROP
+  sudo $iptcmd --append INPUT --in-interface lo+ --jump ACCEPT
+  sudo $iptcmd --append OUTPUT --out-interface lo+ --jump ACCEPT
+}
+
+function lock_except_pinhole() {
+  pinhole_ip=$1
+  pinhole_port=$2
+
+  iptcmd_lockdown $IPTABLES
+  iptcmd_lockdown $IP6TABLES
+  sudo $IPTABLES --append INPUT --source $pinhole_ip --protocol tcp \
+      --source-port $pinhole_port --jump ACCEPT
+  sudo $IPTABLES --append OUTPUT --destination $pinhole_ip --protocol tcp \
+      --destination-port $pinhole_port --jump ACCEPT
+}
+
+function configure_proxy() {
+  gsettings set org.gnome.system.proxy.socks host 127.0.0.1
+  gsettings set org.gnome.system.proxy.socks port 1080
+}
+
+function output_and_configure_proxy_on_connect() {
+  { echo hi | nc 127.0.0.1 1080 &&
+      { echo 'We get signal.'
+        configure_proxy
+      }
+  } ||
+    { sleep 1
+      output_and_configure_proxy_on_connect
+    }
+}
+
+function list_rules() {
+  echo '### Firewall rules'
+  echo '### IPv4:'
+  sudo $IPTABLES --list-rules
+  echo '### IPv6:'
+  sudo $IP6TABLES --list-rules
+}
+
+function reset_and_list_rules() {
+  sh $RESET_FILE
+  rm $RESET_FILE
+  list_rules
+}
+
+
+pinhole_host=$1
+pinhole_port=$2
+user=$3
+[ -z $pinhole_port ] && pinhole_port=22
+[ -z $user ] && user=$(id -un)
+
+pinhole_ip=$(dig +short "$pinhole_host" a | egrep -v '[A-Za-z]')
+
+
+generate_firewall_reset
+trap reset_and_list_rules EXIT
+lock_except_pinhole $pinhole_ip $pinhole_port
+list_rules
+
+( output_and_configure_proxy_on_connect ) &
+
+$SSH -N -p $pinhole_port \
+  -D 1080 \
+  -L 2000:devio.us:22 \
+  "$user@$pinhole_ip"
