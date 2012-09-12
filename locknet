@@ -78,6 +78,7 @@ user=$3
 [ -z $user ] && user=$(id -un)
 
 pinhole_ip=$(dig +short "$pinhole_host" a | egrep -v '[A-Za-z]')
+[ -z $pinhole_ip ] && exit 1
 
 
 generate_firewall_reset
